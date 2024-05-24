@@ -30,8 +30,12 @@
 
 #define MXC_I3C_MAX_FIFO_TRANSACTION 255U
 
-#define GET_FIELD(reg, name, field) \
-    ((i3c->reg & MXC_F_I3C_##name##_##field) >> MXC_F_I3C_##name##_##field##_POS)
+#define GET_FIELD(reg, field) ((i3c->reg & MXC_F_I3C_##field) >> MXC_F_I3C_##field##_POS)
+#define SET_FIELD(reg, field, value)                  \
+    do {                                              \
+        i3c->reg &= ~MXC_F_I3C_##field;               \
+        i3c->reg |= value << MXC_F_I3C_##field##_POS; \
+    } while (0);
 
 #define POLL_REG(reg, name, field) \
     while ((i3c->reg & MXC_F_I3C_##name##_##field) != MXC_F_I3C_##name##_##field) {}
@@ -107,6 +111,18 @@ typedef struct {
     ///< bytes will be stored in this buffer.
 } mxc_i3c_ccc_req_t;
 
+typedef struct {
+    mxc_i3c_regs_t *regs; ///< Pointer to regs of this I3C instance.
+    mxc_i3c_target_t *i3cTargets; ///< List of I3C targets.
+    uint8_t numI3CTargets; ///< Number of I3C targets.
+    mxc_i3c_i2c_target_t *i2cTargets; ///< List of I2C targets.
+    uint8_t numI2CTargets; ///< Number of I2C targets.
+    mxc_i3c_ibi_ack_t ibiAckCB; ///< IBI acknowledge callback.
+    mxc_i3c_ibi_req_t ibiReqCB; ///< IBI request callback.
+    mxc_i3c_ibi_getbyte_t ibiGetByteCB; ///< IBI additional data callback.
+} mxc_i3c_controller_t;
+;
+
 #define MXC_I3C_ADDR_INVALID 0x00U
 
 /* **** Globals **** */
@@ -117,10 +133,11 @@ typedef struct {
 mxc_i3c_controller_t controller[MXC_I3C_INSTANCES];
 
 /* **** Functions **** */
-int MXC_I3C_Init(mxc_i3c_regs_t *i3c, int targetMode)
+int MXC_I3C_Init(mxc_i3c_regs_t *i3c, int targetMode, uint8_t staticAddr)
 {
     int ret = E_NO_ERROR;
     int idx;
+    uint8_t val;
 
     idx = MXC_I3C_GET_IDX(i3c);
     if (idx < 0) {
@@ -165,14 +182,46 @@ int MXC_I3C_Init(mxc_i3c_regs_t *i3c, int targetMode)
         /* 3. Optionally write IBIRULES reg to optimize response to incoming IBIs */
 
         /* 4. Enable controller mode */
-        i3c->mconfig &= ~MXC_F_I3C_MCONFIG_CTARENA;
-        i3c->mconfig |= MXC_S_I3C_MCONFIG_CTARENA_ON;
+        SET_FIELD(mconfig, MCONFIG_CTARENA, MXC_V_I3C_MCONFIG_CTARENA_ON);
     } else {
         /* Target mode initialization */
-        /* 1. */
-        /* After reset, write setup registers needed for optional features */
-        /* 2. */
-        /* Write 1 to CONFIG.TGTENA */
+        /* 1. After reset, write setup registers needed for optional features */
+        if (staticAddr != MXC_I3C_ADDR_INVALID) {
+            if (GET_FIELD(capabilities, CAPABILITIES_SADDR) ==
+                MXC_V_I3C_CAPABILITIES_SADDR_CONFIG) {
+                SET_FIELD(config, CONFIG_SADDR, staticAddr);
+            }
+        }
+
+        if (i3c->capabilities & MXC_F_I3C_CAPABILITIES_FIFORX) {
+            MXC_I3C_SetRXTXThreshold(i3c, MXC_I3C_RX_TH_NOT_EMPTY, MXC_I3C_TX_TH_ALMOST_FULL);
+        }
+
+        /* Set BCR, DCR */
+        val = 0 << 6; /* Device role: target */
+        if (i3c->capabilities & MXC_S_I3C_CAPABILITIES_CCCHANDLE_LIMITS) {
+            val |= 1 << 0; /* Max data speed limitation */
+        }
+        if (i3c->capabilities & MXC_S_I3C_CAPABILITIES_CCCHANDLE_BASIC) {
+            val |= 1 << 5; /* Supports advanced capabiliries */
+        }
+        if (i3c->capabilities & MXC_S_I3C_CAPABILITIES_IBI_MR_HJ_IBI) {
+            val |= 1 << 1; /* Supports IBI generation */
+        }
+        if (i3c->capabilities & MXC_S_I3C_CAPABILITIES_IBI_MR_HJ_IBI_PAYLOAD) {
+            val |= 1 << 2; /* MDB and additional data bytes may follow the IBI */
+        }
+        val |= 1 << 3; /* Offline capable */
+        SET_FIELD(idext, IDEXT_BCR, val);
+
+        /* Set DCR to generic device */
+        SET_FIELD(idext, IDEXT_DCR, 0);
+
+        /* 2. Write 1 to CONFIG.TGTENA */
+        SET_FIELD(config, CONFIG_TGTENA, 1);
+
+        /* Clear STOP bit */
+        SET_FIELD(status, STATUS_STOP, 0);
     }
 
     controller[idx].regs = i3c;
@@ -305,7 +354,7 @@ static int MXC_I3C_IBIAckNack(mxc_i3c_regs_t *i3c, int ack, int mdb, unsigned ch
         while ((i3c->mstatus & MXC_F_I3C_MSTATUS_COMPLETE) == 0 &&
                rdbytes < (1 + MXC_I3C_MAX_IBI_BYTES)) {
             if (i3c->mstatus & MXC_F_I3C_MSTATUS_RXPEND) {
-                *data++ = GET_FIELD(mrdatab, MRDATAB, DATA);
+                *data++ = GET_FIELD(mrdatab, MRDATAB_DATA);
                 rdbytes++;
             }
         }
@@ -329,12 +378,12 @@ static int MXC_I3C_ProcessIBI(mxc_i3c_regs_t *i3c)
         return E_BAD_PARAM;
     }
 
-    if (GET_FIELD(mstatus, MSTATUS, STATE) != MXC_V_I3C_MSTATUS_STATE_IBIACK) {
+    if (GET_FIELD(mstatus, MSTATUS_STATE) != MXC_V_I3C_MSTATUS_STATE_IBIACK) {
         return E_BAD_STATE;
     }
 
-    ibiAddr = GET_FIELD(mstatus, MSTATUS, IBIADDR);
-    ibiType = GET_FIELD(mstatus, MSTATUS, IBITYPE);
+    ibiAddr = GET_FIELD(mstatus, MSTATUS_IBIADDR);
+    ibiType = GET_FIELD(mstatus, MSTATUS_IBITYPE);
     mdb = 0;
     buf = NULL;
     numBytes = NULL;
@@ -698,7 +747,7 @@ int MXC_I3C_PerformDAA(mxc_i3c_regs_t *i3c)
         MXC_I3C_ControllerClearFlags(i3c, MXC_F_I3C_MSTATUS_IBIWON);
     }
 
-    if (GET_FIELD(mstatus, MSTATUS, STATE) != MXC_V_I3C_MSTATUS_STATE_IDLE) {
+    if (GET_FIELD(mstatus, MSTATUS_STATE) != MXC_V_I3C_MSTATUS_STATE_IDLE) {
         return E_BAD_STATE;
     }
 
@@ -738,7 +787,7 @@ int MXC_I3C_PerformDAA(mxc_i3c_regs_t *i3c)
             }
         } else if (ret == E_NO_RESPONSE) {
             /* No more devices waiting for dynamic address assignment */
-            if ((GET_FIELD(mstatus, MSTATUS, STATE) == MXC_V_I3C_MSTATUS_STATE_IDLE) &&
+            if ((GET_FIELD(mstatus, MSTATUS_STATE) == MXC_V_I3C_MSTATUS_STATE_IDLE) &&
                 (i3c->mstatus & MXC_F_I3C_MSTATUS_COMPLETE)) {
                 /* DAA is complete */
                 ret = E_SUCCESS;
@@ -766,7 +815,7 @@ int MXC_I3C_PerformDAA(mxc_i3c_regs_t *i3c)
         pid = ((uint64_t)vendor_id << 32) | part_id;
 
         /* Find device with received PID */
-        if ((GET_FIELD(mstatus, MSTATUS, STATE) == MXC_V_I3C_MSTATUS_STATE_DAA) &&
+        if ((GET_FIELD(mstatus, MSTATUS_STATE) == MXC_V_I3C_MSTATUS_STATE_DAA) &&
             (i3c->mstatus & MXC_F_I3C_MSTATUS_BETWEEN)) {
             target = MXC_I3C_FindTarget(&controller[idx], pid);
             if (target) {
@@ -795,6 +844,95 @@ int MXC_I3C_PerformDAA(mxc_i3c_regs_t *i3c)
     }
 
     return ret;
+}
+
+int MXC_I3C_HotJoin(mxc_i3c_regs_t *i3c)
+{
+    if (!(i3c->capabilities & MXC_S_I3C_CAPABILITIES_IBI_MR_HJ_HOTJOIN)) {
+        return E_NOT_SUPPORTED;
+    }
+
+    if ((MXC_I3C_GetDynamicAddress(i3c) != MXC_I3C_ADDR_INVALID) ||
+        (i3c->status & MXC_F_I3C_STATUS_HJDIS)) {
+        return E_BAD_STATE;
+    }
+
+    SET_FIELD(config, CONFIG_TGTENA, 0);
+    SET_FIELD(ctrl, CTRL_EVENT, MXC_V_I3C_CTRL_EVENT_HOTJOIN);
+    SET_FIELD(config, CONFIG_TGTENA, 1);
+
+    return E_SUCCESS;
+}
+
+int MXC_I3C_RequestIBI(mxc_i3c_regs_t *i3c, unsigned char mdb, mxc_i3c_ibi_getbyte_t getByteCb)
+{
+    int ret, idx;
+    unsigned char byte;
+
+    idx = MXC_I3C_GET_IDX(i3c);
+    if (idx < 0) {
+        return E_BAD_PARAM;
+    }
+
+    if (!(i3c->capabilities & MXC_S_I3C_CAPABILITIES_IBI_MR_HJ_IBI)) {
+        return E_NOT_SUPPORTED;
+    }
+
+    if ((MXC_I3C_GetDynamicAddress(i3c) == MXC_I3C_ADDR_INVALID) ||
+        (i3c->status & MXC_F_I3C_STATUS_IBIDIS)) {
+        return E_BAD_STATE;
+    }
+
+    if (i3c->status & MXC_F_I3C_STATUS_EVENT) {
+        return E_BUSY;
+    }
+
+    /* Write MDB and additional data bytes to TX FIFO */
+    controller[idx].ibiGetByteCB = getByteCb;
+    if (i3c->capabilities & MXC_S_I3C_CAPABILITIES_IBI_MR_HJ_IBI_PAYLOAD) {
+        if (getByteCb) {
+            while ((i3c->status & MXC_F_I3C_STATUS_TXNOTFULL)) {
+                ret = getByteCb(i3c, &byte);
+                if (ret) {
+                    i3c->wdatab1 = byte;
+                } else {
+                    break;
+                }
+            }
+        }
+        SET_FIELD(ctrl, CTRL_IBIDATA, mdb);
+        SET_FIELD(ctrl, CTRL_EXTDATA, !!(i3c->datactrl & MXC_F_I3C_DATACTRL_TXCOUNT));
+    }
+
+    MXC_I3C_TargetEnableInt(i3c, MXC_F_I3C_INTSET_EVENT | MXC_F_I3C_INTSET_TXNOTFULL |
+                                     MXC_F_I3C_INTSET_STOP);
+
+    SET_FIELD(ctrl, CTRL_EVENT, MXC_V_I3C_CTRL_EVENT_IBI);
+
+    return E_SUCCESS;
+}
+
+int MXC_I3C_Standby(mxc_i3c_regs_t *i3c)
+{
+    if (MXC_I3C_GetDynamicAddress(i3c) == MXC_I3C_ADDR_INVALID) {
+        return E_BAD_STATE;
+    }
+
+    SET_FIELD(config, CONFIG_TGTENA, 0);
+
+    return E_SUCCESS;
+}
+
+int MXC_I3C_Wakeup(mxc_i3c_regs_t *i3c)
+{
+    if ((MXC_I3C_GetDynamicAddress(i3c) == MXC_I3C_ADDR_INVALID) ||
+        (GET_FIELD(config, CONFIG_TGTENA) == 1)) {
+        return E_BAD_STATE;
+    }
+
+    i3c->config |= (MXC_F_I3C_CONFIG_TGTENA | MXC_F_I3C_CONFIG_OFFLINE);
+
+    return E_SUCCESS;
 }
 
 int MXC_I3C_ReadI2CBlocking(mxc_i3c_regs_t *i3c, uint8_t staticAddr, unsigned char *bytes,
@@ -901,7 +1039,7 @@ int MXC_I3C_ReadSDRBlocking(mxc_i3c_regs_t *i3c, unsigned char dynAddr, unsigned
     int ret;
     unsigned int remaining, chunkSize;
 
-    if (GET_FIELD(mstatus, MSTATUS, STATE) != MXC_V_I3C_MSTATUS_STATE_IDLE) {
+    if (GET_FIELD(mstatus, MSTATUS_STATE) != MXC_V_I3C_MSTATUS_STATE_IDLE) {
         return E_BAD_STATE;
     }
 
@@ -938,7 +1076,7 @@ int MXC_I3C_WriteSDRBlocking(mxc_i3c_regs_t *i3c, unsigned char dynAddr, unsigne
     int ret;
     unsigned int remaining;
 
-    if (GET_FIELD(mstatus, MSTATUS, STATE) != MXC_V_I3C_MSTATUS_STATE_IDLE) {
+    if (GET_FIELD(mstatus, MSTATUS_STATE) != MXC_V_I3C_MSTATUS_STATE_IDLE) {
         return E_BAD_STATE;
     }
 
@@ -961,6 +1099,41 @@ int MXC_I3C_WriteSDRBlocking(mxc_i3c_regs_t *i3c, unsigned char dynAddr, unsigne
     *len -= remaining;
 
     return ret;
+}
+
+int MXC_I3C_ReadRXFIFO(mxc_i3c_regs_t *i3c, volatile unsigned char *bytes, unsigned int len)
+{
+    unsigned int readb = 0;
+
+    while ((len > readb) && !(i3c->mstatus & MXC_F_I3C_MSTATUS_ERRWARN) &&
+           (i3c->mstatus & MXC_F_I3C_MSTATUS_RXPEND)) {
+        bytes[readb++] = i3c->mrdatab;
+    }
+
+    return readb;
+}
+
+int MXC_I3C_WriteTXFIFO(mxc_i3c_regs_t *i3c, volatile unsigned char *bytes, unsigned int len)
+{
+    unsigned int written = 0;
+
+    if (len == 0) {
+        return 0;
+    }
+
+    while ((len - 1 > written) && !(i3c->mstatus & MXC_F_I3C_MSTATUS_ERRWARN) &&
+           (i3c->mstatus & MXC_F_I3C_MSTATUS_TXNOTFULL)) {
+        i3c->mwdatab1 = bytes[written++];
+    }
+
+    if ((len == written + 1) && (i3c->mstatus & MXC_F_I3C_MSTATUS_TXNOTFULL)) {
+        i3c->mwdatabe = bytes[written++];
+        if (i3c->mstatus & MXC_F_I3C_MSTATUS_ERRWARN) {
+            return written;
+        }
+    }
+
+    return written;
 }
 
 int MXC_I3C_SetPPFrequency(mxc_i3c_regs_t *i3c, unsigned int frequency)
@@ -1128,45 +1301,62 @@ int MXC_I3C_SetRXTXThreshold(mxc_i3c_regs_t *i3c, mxc_i3c_rx_threshold_t rxth,
     return E_SUCCESS;
 }
 
-int MXC_I3C_ReadRXFIFO(mxc_i3c_regs_t *i3c, volatile unsigned char *bytes, unsigned int len)
+uint8_t MXC_I3C_GetDynamicAddress(mxc_i3c_regs_t *i3c)
 {
-    unsigned int readb = 0;
-
-    while ((len > readb) && !(i3c->mstatus & MXC_F_I3C_MSTATUS_ERRWARN) &&
-           (i3c->mstatus & MXC_F_I3C_MSTATUS_RXPEND)) {
-        bytes[readb++] = i3c->mrdatab;
+    if (GET_FIELD(config, CONFIG_TGTENA) == 1 && GET_FIELD(dynaddr, DYNADDR_DAVALID) == 1) {
+        return GET_FIELD(dynaddr, DYNADDR_DADDR);
     }
 
-    return readb;
+    return MXC_I3C_ADDR_INVALID;
 }
 
-int MXC_I3C_WriteTXFIFO(mxc_i3c_regs_t *i3c, volatile unsigned char *bytes, unsigned int len)
+void MXC_I3C_AsyncHandler(mxc_i3c_regs_t *i3c)
 {
-    unsigned int written = 0;
+    int idx, ret;
+    uint8_t flags, byte;
 
-    if (len == 0) {
-        return 0;
+    idx = MXC_I3C_GET_IDX(i3c);
+    if (idx < 0) {
+        return;
     }
 
-    while ((len - 1 > written) && !(i3c->mstatus & MXC_F_I3C_MSTATUS_ERRWARN) &&
-           (i3c->mstatus & MXC_F_I3C_MSTATUS_TXNOTFULL)) {
-        i3c->mwdatab1 = bytes[written++];
-    }
-
-    if ((len == written + 1) && (i3c->mstatus & MXC_F_I3C_MSTATUS_TXNOTFULL)) {
-        i3c->mwdatabe = bytes[written++];
-        if (i3c->mstatus & MXC_F_I3C_MSTATUS_ERRWARN) {
-            return written;
+    if (i3c->mconfig & MXC_F_I3C_MCONFIG_CTARENA) {
+        /* Controller mode */
+        if (i3c->mintmasked & MXC_F_I3C_MINTMASKED_TGTSTART) {
+            MXC_I3C_ControllerClearFlags(i3c, MXC_F_I3C_MINTMASKED_TGTSTART);
+            MXC_I3C_ProcessIBI(i3c);
         }
-    }
+    } else {
+        /* Target mode */
+        flags = MXC_I3C_TargetGetFlags(i3c);
 
-    return written;
-}
+        if (flags & MXC_F_I3C_INTMASKED_EVENT) {
+            /* IBI acked */
+            if (GET_FIELD(status, STATUS_EVDET) == MXC_V_I3C_STATUS_EVDET_REQ_ACKED) {
+                MXC_I3C_TargetClearFlags(i3c, MXC_F_I3C_INTMASKED_EVENT);
+                MXC_I3C_TargetDisableInt(i3c, MXC_F_I3C_INTMASKED_EVENT);
+                if (GET_FIELD(ctrl, CTRL_EVENT) == MXC_V_I3C_CTRL_EVENT_IBI) {
+                    /* Enable TX interrupts to transmit additional payload */
+                    MXC_I3C_TargetEnableInt(i3c, MXC_F_I3C_INTSET_TXNOTFULL);
+                }
+            }
+        }
 
-void MXC_I3C_IRQHandler(mxc_i3c_regs_t *i3c)
-{
-    if (i3c->mintmasked & MXC_F_I3C_MINTMASKED_TGTSTART) {
-        MXC_I3C_ControllerClearFlags(i3c, MXC_F_I3C_MINTMASKED_TGTSTART);
-        MXC_I3C_ProcessIBI(i3c);
+        flags = MXC_I3C_TargetGetFlags(i3c);
+        if (flags & MXC_F_I3C_INTMASKED_TXNOTFULL) {
+            if (controller[idx].ibiGetByteCB) {
+                while ((i3c->status & MXC_F_I3C_STATUS_TXNOTFULL)) {
+                    ret = controller[idx].ibiGetByteCB(i3c, &byte);
+                    if (ret) {
+                        i3c->wdatab1 = byte;
+                    } else {
+                        /* No more data */
+                        MXC_I3C_TargetDisableInt(i3c, MXC_F_I3C_INTSET_TXNOTFULL);
+                        controller[idx].ibiGetByteCB = NULL;
+                        break;
+                    }
+                }
+            }
+        }
     }
 }

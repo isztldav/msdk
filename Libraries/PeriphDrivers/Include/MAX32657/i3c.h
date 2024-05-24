@@ -42,7 +42,6 @@ extern "C" {
  */
 
 /***** Definitions *****/
-typedef struct _i3c_controller_t mxc_i3c_controller_t;
 typedef struct _i3c_target_t mxc_i3c_target_t;
 typedef struct _i2c_target_t mxc_i3c_i2c_target_t;
 
@@ -62,7 +61,7 @@ typedef enum {
     MXC_I3C_HIGH_KEEPER_ON_CHIP = MXC_S_I3C_MCONFIG_HKEEP_ONCHIP_SCL_SDA, ///< SCL and SDA pads
     ///< have weak pull-ups
     MXC_I3C_HIGH_KEEPER_EXT_SDA = MXC_S_I3C_MCONFIG_HKEEP_EXTERNAL_SDA, ///< External high-keeper
-    ///< support for SDA signal 
+    ///< support for SDA signal
     MXC_I3C_HIGH_KEEPER_EXT_SCL_SDA = MXC_S_I3C_MCONFIG_HKEEP_EXTERNAL_SCL_SDA,
     ///< External high-keeper support for SCL and SDA signals
 } mxc_i3c_high_keeper_t;
@@ -92,10 +91,10 @@ typedef enum {
  * 
  */
 typedef enum {
-    MXC_I3C_IBI_TYPE_NONE = MXC_V_I3C_MSTATUS_IBITYPE_NONE, ///< 
-    MXC_I3C_IBI_TYPE_IBI = MXC_V_I3C_MSTATUS_IBITYPE_IBI, ///< 
-    MXC_I3C_IBI_TYPE_CONTROLLER_REQ = MXC_V_I3C_MSTATUS_IBITYPE_CONTROLLER_REQ, ///< 
-    MXC_I3C_IBI_TYPE_HOTJOIN_REQ = MXC_V_I3C_MSTATUS_IBITYPE_HOTJOIN_REQ, ///< 
+    MXC_I3C_IBI_TYPE_NONE = MXC_V_I3C_MSTATUS_IBITYPE_NONE, ///<
+    MXC_I3C_IBI_TYPE_IBI = MXC_V_I3C_MSTATUS_IBITYPE_IBI, ///<
+    MXC_I3C_IBI_TYPE_CONTROLLER_REQ = MXC_V_I3C_MSTATUS_IBITYPE_CONTROLLER_REQ, ///<
+    MXC_I3C_IBI_TYPE_HOTJOIN_REQ = MXC_V_I3C_MSTATUS_IBITYPE_HOTJOIN_REQ, ///<
 } mxc_i3c_ibi_type_t;
 
 /**
@@ -111,7 +110,8 @@ typedef enum {
  * @return  0 if the IBI should not be acknowledged (NACK), non-zero to
  *          acknowledge the IBI.
  */
-typedef int (*mxc_i3c_ibi_ack_t)(mxc_i3c_regs_t *i3c, unsigned char dynAddr, mxc_i3c_ibi_type_t ibiType);
+typedef int (*mxc_i3c_ibi_ack_t)(mxc_i3c_regs_t *i3c, unsigned char dynAddr,
+                                 mxc_i3c_ibi_type_t ibiType);
 
 /**
  * @brief   IBI request callback. Called after an IBI is acknowledged by the application
@@ -122,6 +122,16 @@ typedef int (*mxc_i3c_ibi_ack_t)(mxc_i3c_regs_t *i3c, unsigned char dynAddr, mxc
  * 
  */
 typedef void (*mxc_i3c_ibi_req_t)(mxc_i3c_regs_t *i3c, mxc_i3c_target_t *target);
+
+/**
+ * @brief   IBI payload request callback. Write additional byte to \a byte.
+ * 
+ * This function will be called as long as non-zero is returned.
+ * 
+ * @return  Non-zero if a byte is written to \a byte, 0 to indicate no more additional
+ * bytes left to send.
+ */
+typedef int (*mxc_i3c_ibi_getbyte_t)(mxc_i3c_regs_t *i3c, unsigned char *byte);
 
 /**
  * @brief   The information required to perform a complete I2C transaction as
@@ -146,16 +156,6 @@ struct _i2c_target_t {
     uint8_t staticAddr; ///< Target address of the I2C target.
 };
 
-struct _i3c_controller_t {
-    mxc_i3c_regs_t *regs; ///< Pointer to regs of this I3C instance.
-    mxc_i3c_target_t *i3cTargets; ///< List of I3C targets.
-    uint8_t numI3CTargets; ///< Number of I3C targets.
-    mxc_i3c_i2c_target_t *i2cTargets; ///< List of I2C targets.
-    uint8_t numI2CTargets; ///< Number of I2C targets.
-    mxc_i3c_ibi_ack_t ibiAckCB; ///< IBI acknowledge callback.
-    mxc_i3c_ibi_req_t ibiReqCB; ///< IBI request callback.
-};
-
 /***** Function Prototypes *****/
 
 /* ************************************************************************* */
@@ -172,10 +172,11 @@ struct _i3c_controller_t {
  * @param   i3c         Pointer to I3C registers (selects the I3C block used).
  * @param   targetMode  Whether to put the device in controller or target mode. Use
  *                      non-zero.
+ * @param   staticAddr  I2C-style static address. Has no effect if the address is hardwired.
  *
  * @return  Success/Fail, see \ref MXC_Error_Codes for a list of return codes.
  */
-int MXC_I3C_Init(mxc_i3c_regs_t *i3c, int targetMode);
+int MXC_I3C_Init(mxc_i3c_regs_t *i3c, int targetMode, uint8_t staticAddr);
 
 /**
  * @brief   Set the I3C targets connected to this controller instance. 
@@ -211,10 +212,11 @@ int MXC_I3C_SetI2CTargets(mxc_i3c_regs_t *i3c, mxc_i3c_i2c_target_t *targets, ui
  * 
  * @return  Success/Fail, see \ref MXC_Error_Codes for a list of return codes. 
  */
-int MXC_I3C_BroadcastCCC(mxc_i3c_regs_t *i3c, unsigned char ccc, int defByte, unsigned char *data, int len);
+int MXC_I3C_BroadcastCCC(mxc_i3c_regs_t *i3c, unsigned char ccc, int defByte, unsigned char *data,
+                         int len);
 
 /**
- * @brief Perform dynamic address assignment.
+ * @brief   Perform dynamic address assignment.
  * 
  * @param   i3c         Pointer to I3C registers.
  *  
@@ -223,7 +225,60 @@ int MXC_I3C_BroadcastCCC(mxc_i3c_regs_t *i3c, unsigned char ccc, int defByte, un
 int MXC_I3C_PerformDAA(mxc_i3c_regs_t *i3c);
 
 /**
- * @brief Read multiple bytes from an I2C target in blocking mode.
+ * @brief   Generate a hot-join request in target mode.
+ * 
+ * Hot-Join will only be generated if the target is powered on after the bus is 
+ * configured or physically connected to an already configured bus. If the active
+ * controller disables the Hot-Join events through DISEC CCCs, it will not be
+ * generated either.
+ * 
+ * @param   i3c         Pointer to I3C registers.
+ * 
+ * @return  E_SUCCESS if request is submitted. E_BAD_STATE if operation is not allowed in
+ *          the current state. E_NOT_SUPPORTED is returned in case HotJoin generation is not
+ *          supported. Note that return value of E_SUCCESS does not guarantee a successful
+ *          Hot-Join since the decision is up to the controller.
+ */
+int MXC_I3C_HotJoin(mxc_i3c_regs_t *i3c);
+
+/**
+ * @brief   Generate an In-Band Interrupt in target mode.
+ * 
+ * @param   i3c         Pointer to I3C registers.
+ * @param   mdb         Mandatory data byte to be sent if IBI is acknowledged.
+ * @param   getByteCb   Callback to get additional databytes from the application. Pass NULL
+ *                      if no additional data bytes except \a mdb will be sent with the IBI
+ *                      request.
+ * 
+ * @return  E_SUCCESS if request is submitted. E_BAD_STATE if operation is not allowed in
+ *          the current state. E_NOT_SUPPORTED is returned in case IBI generation is not
+ *          supported. Note that return value of E_SUCCESS does not guarantee that the
+ *          request has been acknowledged.
+ */
+int MXC_I3C_RequestIBI(mxc_i3c_regs_t *i3c, unsigned char mdb, mxc_i3c_ibi_getbyte_t getByteCb);
+
+/**
+ * @brief   Enter offline mode and stop participating on the bus.
+ * 
+ * Offline mode is only allowed if the target has already been assigned a dynamic address.
+ * 
+ * @param   i3c         Pointer to I3C registers.
+ * 
+ * @return  E_SUCCESS if device switches to offline mode, E_BAD_STATE otherwise.
+ */
+int MXC_I3C_Standby(mxc_i3c_regs_t *i3c);
+
+/**
+ * @brief   Exit offline mode using previously assigned dynamic address.
+ * 
+ * @param   i3c         Pointer to I3C registers.
+ * 
+ * @return  E_SUCCESS if device comes out of offline mode, E_BAD_STATE otherwise.
+ */
+int MXC_I3C_Wakeup(mxc_i3c_regs_t *i3c);
+
+/**
+ * @brief   Read multiple bytes from an I2C target in blocking mode.
  * 
  * @param   i3c         Pointer to I3C registers.
  * @param   staticAddr  7-bit target address to read from.
@@ -233,10 +288,11 @@ int MXC_I3C_PerformDAA(mxc_i3c_regs_t *i3c);
  * 
  * @return  Success/Fail, see \ref MXC_Error_Codes for a list of return codes. 
  */
-int MXC_I3C_ReadI2CBlocking(mxc_i3c_regs_t *i3c, unsigned char staticAddr, unsigned char *bytes, unsigned int *len);
+int MXC_I3C_ReadI2CBlocking(mxc_i3c_regs_t *i3c, unsigned char staticAddr, unsigned char *bytes,
+                            unsigned int *len);
 
 /**
- * @brief Write multiple bytes to an I2C target in blocking mode.
+ * @brief   Write multiple bytes to an I2C target in blocking mode.
  * 
  * @param   i3c         Pointer to I3C registers.
  * @param   staticAddr  7-bit target address to read from.
@@ -246,18 +302,66 @@ int MXC_I3C_ReadI2CBlocking(mxc_i3c_regs_t *i3c, unsigned char staticAddr, unsig
  * 
  * @return  Success/Fail, see \ref MXC_Error_Codes for a list of return codes. 
  */
-int MXC_I3C_WriteI2CBlocking(mxc_i3c_regs_t *i3c, unsigned char staticAddr, unsigned char *bytes, unsigned int *len);
+int MXC_I3C_WriteI2CBlocking(mxc_i3c_regs_t *i3c, unsigned char staticAddr, unsigned char *bytes,
+                             unsigned int *len);
 
 /**
- * @brief Emit an I2C STOP.
+ * @brief   Read multiple bytes from an I3C target in blocking mode.
+ * 
+ * @param   i3c         Pointer to I3C registers.
+ * @param   dynAddr     7-bit target dynamic address to read from.
+ * @param   len         The number of bytes to read. On return from this function,
+ *                      this will be set to the number of bytes actually received.
+ *
+ * @return  Success/Fail, see \ref MXC_Error_Codes for a list of return codes. 
+ */
+int MXC_I3C_ReadSDRBlocking(mxc_i3c_regs_t *i3c, unsigned char dynAddr, unsigned char *bytes,
+                            unsigned int *len);
+
+/**
+ * @brief   Write multiple bytes to an I3C target in blocking mode.
+ * 
+ * @param   i3c         Pointer to I3C registers.
+ * @param   dynAddr     7-bit target dynamic address to write to.
+ * @param   len         The number of bytes to write. On return from this function,
+ *                      this will be set to the number of bytes actually sent.
+ *
+ * @return  Success/Fail, see \ref MXC_Error_Codes for a list of return codes. 
+ */
+int MXC_I3C_WriteSDRBlocking(mxc_i3c_regs_t *i3c, unsigned char dynAddr, unsigned char *bytes,
+                             unsigned int *len);
+
+/**
+ * @brief   Unloads bytes from the receive FIFO.
+ *
+ * @param   i3c         Pointer to I3C registers.
+ * @param   bytes       The buffer to read the data into.
+ * @param   len         The number of bytes to read.
+ *
+ * @return  The number of bytes actually read.
+ */
+int MXC_I3C_ReadRXFIFO(mxc_i3c_regs_t *i3c, volatile unsigned char *bytes, unsigned int len);
+
+/**
+ * @brief   Loads bytes into the transmit FIFO.
+ *
+ * @param   i2c         Pointer to I3C registers.
+ * @param   bytes       The buffer containing the bytes to write.
+ * @param   len         The number of bytes to write.
+ *
+ * @return  The number of bytes actually written.
+ */
+int MXC_I3C_WriteTXFIFO(mxc_i3c_regs_t *i3c, volatile unsigned char *bytes, unsigned int len);
+
+/**
+ * @brief   Emit an I2C STOP.
  * 
  * @param   i3c         Pointer to I3C registers. 
  */
 static inline void MXC_I3C_I2CStop(mxc_i3c_regs_t *i3c)
 {
     /* Configure MCTRL register for STOP */
-    i3c->mctrl = MXC_S_I3C_MCTRL_REQUEST_EMIT_STOP |
-                (1 << MXC_F_I3C_MCTRL_TYPE_POS);
+    i3c->mctrl = MXC_S_I3C_MCTRL_REQUEST_EMIT_STOP | (1 << MXC_F_I3C_MCTRL_TYPE_POS);
     /* Wait for MCTRL_DONE */
     while (!(i3c->mstatus & MXC_F_I3C_MSTATUS_MCTRLDONE)) {}
 }
@@ -274,30 +378,6 @@ static inline void MXC_I3C_Stop(mxc_i3c_regs_t *i3c)
     /* Wait for MCTRL_DONE */
     while (!(i3c->mstatus & MXC_F_I3C_MSTATUS_MCTRLDONE)) {}
 }
-
-/**
- * @brief Read multiple bytes from an I3C target in blocking mode.
- * 
- * @param   i3c         Pointer to I3C registers.
- * @param   dynAddr     7-bit target dynamic address to read from.
- * @param   len         The number of bytes to read. On return from this function,
- *                      this will be set to the number of bytes actually received.
- *
- * @return  Success/Fail, see \ref MXC_Error_Codes for a list of return codes. 
- */
-int MXC_I3C_ReadSDRBlocking(mxc_i3c_regs_t *i3c, unsigned char dynAddr, unsigned char *bytes, unsigned int *len);
-
-/**
- * @brief Write multiple bytes to an I3C target in blocking mode.
- * 
- * @param   i3c         Pointer to I3C registers.
- * @param   dynAddr     7-bit target dynamic address to write to.
- * @param   len         The number of bytes to write. On return from this function,
- *                      this will be set to the number of bytes actually sent.
- *
- * @return  Success/Fail, see \ref MXC_Error_Codes for a list of return codes. 
- */
-int MXC_I3C_WriteSDRBlocking(mxc_i3c_regs_t *i3c, unsigned char dynAddr, unsigned char *bytes, unsigned int *len);
 
 /**
  * @brief   Sets the SCL frequency for I3C push-pull operation.
@@ -407,36 +487,25 @@ int MXC_I3C_SetHighKeeperMode(mxc_i3c_regs_t *i3c, mxc_i3c_high_keeper_t hkeep);
  *
  * @return  Success/Fail, see \ref MXC_Error_Codes for a list of return codes.
  */
-int MXC_I3C_SetRXTXThreshold(mxc_i3c_regs_t *i3c, mxc_i3c_rx_threshold_t rxth, mxc_i3c_tx_threshold_t txth);
+int MXC_I3C_SetRXTXThreshold(mxc_i3c_regs_t *i3c, mxc_i3c_rx_threshold_t rxth,
+                             mxc_i3c_tx_threshold_t txth);
 
 /**
- * @brief   Unloads bytes from the receive FIFO.
- *
+ * @brief   Returns the dynamic address in target mode.
+ * 
  * @param   i3c         Pointer to I3C registers.
- * @param   bytes       The buffer to read the data into.
- * @param   len         The number of bytes to read.
- *
- * @return  The number of bytes actually read.
+ * 
+ * @return  Dynamic address set by bus controller. If the address is invalid or
+ *          device is not running in target mode, then 0 is returned.
  */
-int MXC_I3C_ReadRXFIFO(mxc_i3c_regs_t *i3c, volatile unsigned char *bytes, unsigned int len);
-
-/**
- * @brief   Loads bytes into the transmit FIFO.
- *
- * @param   i2c         Pointer to I3C registers.
- * @param   bytes       The buffer containing the bytes to write.
- * @param   len         The number of bytes to write.
- *
- * @return  The number of bytes actually written.
- */
-int MXC_I3C_WriteTXFIFO(mxc_i3c_regs_t *i3c, volatile unsigned char *bytes, unsigned int len);
+uint8_t MXC_I3C_GetDynamicAddress(mxc_i3c_regs_t *i3c);
 
 /**
  * @brief   Interrupt handler.
  * 
  * @param   i3c         Pointer to I3C registers.
  */
-void MXC_I3C_IRQHandler(mxc_i3c_regs_t *i3c);
+void MXC_I3C_AsyncHandler(mxc_i3c_regs_t *i3c);
 
 /**
  * @brief   Removes and discards all bytes currently in the receive FIFO.
@@ -513,7 +582,7 @@ static inline void MXC_I3C_ControllerDisableInt(mxc_i3c_regs_t *i3c, uint32_t ma
  */
 static inline unsigned int MXC_I3C_ControllerGetFlags(mxc_i3c_regs_t *i3c)
 {
-    return i3c->mstatus;
+    return i3c->mintmasked;
 }
 
 /**
@@ -528,6 +597,54 @@ static inline unsigned int MXC_I3C_ControllerGetFlags(mxc_i3c_regs_t *i3c)
 static inline void MXC_I3C_ControllerClearFlags(mxc_i3c_regs_t *i3c, uint32_t mask)
 {
     i3c->mstatus |= mask;
+}
+
+/**
+ * @brief   Enable target interrupts.
+ * 
+ * @param   i3c         Pointer to I3C registers.
+ * @param   mask        Interrupt mask to set.
+ */
+static inline void MXC_I3C_TargetEnableInt(mxc_i3c_regs_t *i3c, uint32_t mask)
+{
+    i3c->intset |= mask;
+}
+
+/**
+ * @brief   Disable target interrupts.
+ * 
+ * @param   i3c         Pointer to I3C registers.
+ * @param   mask        Interrupt mask to set.
+ */
+static inline void MXC_I3C_TargetDisableInt(mxc_i3c_regs_t *i3c, uint32_t mask)
+{
+    i3c->intclr |= mask;
+}
+
+/**
+ * @brief   Get the presently set interrupt flags.
+ *
+ * @param   i3c         Pointer to I3C registers.
+ *
+ * @return  See \ref MXC_Error_Codes for a list of return values.
+ */
+static inline unsigned int MXC_I3C_TargetGetFlags(mxc_i3c_regs_t *i3c)
+{
+    return i3c->intmasked;
+}
+
+/**
+ * @brief   Clear target interrupts.
+ * 
+ * Note that some bits cannot be cleared manually and self-clear only when their
+ * respective condition occurs.
+ * 
+ * @param   i3c         Pointer to I3C registers.
+ * @param   mask        Interrupt mask to clear.
+ */
+static inline void MXC_I3C_TargetClearFlags(mxc_i3c_regs_t *i3c, uint32_t mask)
+{
+    i3c->status |= mask;
 }
 
 /**@} end of group i3c */
